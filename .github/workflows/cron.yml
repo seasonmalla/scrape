@@ -1,8 +1,6 @@
 name: NEPSE Cron Job
 
 on:
-  schedule:
-    - cron: "*/15 * * * *" # Every 15 minutes (UTC)
   workflow_dispatch: # Manual trigger (optional)
 
 jobs:
