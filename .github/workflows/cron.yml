@@ -24,4 +24,4 @@ jobs:
           pip install -r Requirements.txt
 
       - name: Run NEPSE Cron Script
-        run: python cron.py
+        run: timeout 60s python cron.py
