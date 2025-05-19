@@ -1,8 +1,8 @@
 {
   "functions": {
     "api/cron.py": {
-      "runtime": "python3.12",
-      "schedule": "0 4 * * *"
+      "runtime": "python3.9",
+      "schedule": "*/5 * * * *"
     }
   }
 }
