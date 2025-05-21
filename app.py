@@ -63,6 +63,7 @@ def hello():
 @app.route('/api/v1/scrape', methods=['POST'])
 def save_price_volume_history():
     try:
+        logger.info('Scrape endpoint accessed')
         # Get request data
         data = request.get_json()
         
@@ -117,7 +118,7 @@ def camel_to_snake(name):
     return re.sub(r'([a-z0-9])([A-Z])', r'\1_\2', name).lower()
 
 def retrieve_cuurent_price_volume_history():
-    current_date = datetime.now()
+    current_date = datetime.now() 
     current_weekday = current_date.weekday()
     
     if current_weekday in [4, 5]:  # 4 is Friday, 5 is Saturday
