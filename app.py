@@ -1,4 +1,4 @@
-from flask import Flask
+from flask import Flask, request, jsonify
 from nepse import Nepse
 from sqlalchemy import create_engine
 import logging
@@ -60,10 +60,57 @@ def hello():
     logger.info('Hello endpoint accessed')
     return 'Hello, World! apple'
 
-@app.route('/api/v1/scrape')
+@app.route('/api/v1/scrape', methods=['POST'])
 def save_price_volume_history():
-    logger.info('Fetching summary data')
-    return retrieve_cuurent_price_volume_history()
+    try:
+        # Get request data
+        data = request.get_json()
+        
+        # Validate request data
+        if not data:
+            return jsonify({
+                "message": "No data provided",
+                "status": 400
+            }), 400
+            
+        # Validate secret key
+        secret_key = os.getenv('SECRET_KEY_SCRAPE')
+        if not secret_key:
+            logger.error("SECRET_KEY_SCRAPE environment variable is not set")
+            return jsonify({
+                "message": "Server configuration error",
+                "status": 500
+            }), 500
+            
+        if 'secret_key_scrape' not in data:
+            return jsonify({
+                "message": "secret_key_scrape is required",
+                "status": 400
+            }), 400
+            
+        if data['secret_key_scrape'] != secret_key:
+            logger.warning("Invalid secret key provided")
+            return jsonify({
+                "message": "Invalid secret key",
+                "status": 401
+            }), 401
+            
+        # Log the request
+        logger.info("Received valid scrape request")
+        
+        # Process the request
+        result = retrieve_cuurent_price_volume_history()
+        
+        # Return response
+        return jsonify(result), 200
+        
+    except Exception as e:
+        logger.error(f"Error processing request: {str(e)}")
+        return jsonify({
+            "message": "Internal server error",
+            "status": 500,
+            "error": str(e)
+        }), 500
 
 def camel_to_snake(name):
     # Replace capital letters with underscore followed by lowercase letter
