@@ -63,7 +63,7 @@ def hello():
 @app.route('/api/v1/scrape', methods=['POST'])
 def save_price_volume_history():
     try:
-        logger.info('Scrape endpoint accessed')
+        logger.info('Scrape endpoint start')
         # Get request data
         data = request.get_json()
         
