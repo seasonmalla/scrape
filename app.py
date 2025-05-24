@@ -57,7 +57,7 @@ dtype_spec = {
 nepse.setTLSVerification(False)
 
 @app.route('/api/v1/financial', methods=['POST'])
-def hello():
+def financial():
     logger.info('financial endpoint accessed')
     data = request.get_json()
     
@@ -106,6 +106,56 @@ def hello():
         logger.error(f"Error getting authorization headers: {str(e)}")
         return jsonify({"message": "Authorization failed", "status": 500}), 500
     
+@app.route('/api/v1/divided', methods=['POST'])
+def divided():
+    logger.info('divided endpoint accessed')
+    data = request.get_json()
+    
+    try:
+        # Validate request data
+        validation = api_validation(data)
+        if validation is not None:
+            return jsonify(validation), validation['status']
+        
+        # Log the request
+        logger.info("Received valid scrape request")
+        # Check security code exists
+        if 'security_id' not in data:
+            logger.error("security_id is required")
+            return jsonify({"message": "security_id is required", "status": 400}), 400
+        if type(data['security_id']) is not int:
+            logger.error("security_id must be an integer")
+            return jsonify({"message": "security_id must be an integer", "status": 400}), 400
+        
+        security_id = get_security_id_from_price_volume(data['security_id'])
+        if len(security_id) == 0:
+            logger.error(f"Security ID {data['security_id']} not found")
+            return jsonify({"message": f"Security ID {data['security_id']} not found", "status": 404}), 404
+        else:
+            try:
+                # Get authorization headers
+                logger.info('Getting authorization headers')
+                auth_header = nepse.getAuthorizationHeaders()
+                logger.info('Authorization successful')
+                url=f'https://www.nepalstock.com.np/api/nots/application/dividend/{data['security_id']}'
+                client = httpx.Client(verify=False, http2=True, timeout=100)
+                response = client.get(
+                        url,
+                        headers=(auth_header),
+                    )
+                if response.status_code == 200:
+                    return jsonify({"status":"success","data":response.json()}), 200
+                else:
+                    return jsonify({"message": "Failed to retrieve data", "status": response.status_code}), response.status_code
+                # Get the authorization headers
+            except Exception as e:
+                logger.error(f"Error during login: {str(e)}")
+                return jsonify({"message": "Login failed", "status": 500}), 500
+        
+    except Exception as e:
+        logger.error(f"Error getting authorization headers: {str(e)}")
+        return jsonify({"message": "Authorization failed", "status": 500}), 500
+     
 
 @app.route('/api/v1/scrape', methods=['POST'])
 def save_price_volume_history():
