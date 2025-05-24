@@ -94,8 +94,7 @@ def hello():
                         headers=(auth_header),
                     )
                 if response.status_code == 200:
-                    if len(response.json())>0 :
-                        return jsonify({"status":"success","data":response.json()}), 200
+                    return jsonify({"status":"success","data":response.json()}), 200
                 else:
                     return jsonify({"message": "Failed to retrieve data", "status": response.status_code}), response.status_code
                 # Get the authorization headers
