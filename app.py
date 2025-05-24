@@ -5,10 +5,11 @@ import logging
 import pandas as pd
 from datetime import datetime, timedelta
 import re
-import sys
 import time
 import os
 from dotenv import load_dotenv
+import httpx
+import json
 
 # Load environment variables
 load_dotenv()
@@ -55,10 +56,57 @@ dtype_spec = {
 
 nepse.setTLSVerification(False)
 
-@app.route('/')
+@app.route('/api/v1/financial', methods=['POST'])
 def hello():
-    logger.info('Hello endpoint accessed')
-    return 'Hello, World! apple'
+    logger.info('financial endpoint accessed')
+    data = request.get_json()
+    
+    try:
+        # Validate request data
+        validation = api_validation(data)
+        if validation is not None:
+            return jsonify(validation), validation['status']
+        
+        # Log the request
+        logger.info("Received valid scrape request")
+        # Check security code exists
+        if 'security_id' not in data:
+            logger.error("security_id is required")
+            return jsonify({"message": "security_id is required", "status": 400}), 400
+        if type(data['security_id']) is not int:
+            logger.error("security_id must be an integer")
+            return jsonify({"message": "security_id must be an integer", "status": 400}), 400
+        
+        security_id = get_security_id_from_price_volume(data['security_id'])
+        if len(security_id) == 0:
+            logger.error(f"Security ID {data['security_id']} not found")
+            return jsonify({"message": f"Security ID {data['security_id']} not found", "status": 404}), 404
+        else:
+            try:
+                # Get authorization headers
+                logger.info('Getting authorization headers')
+                auth_header = nepse.getAuthorizationHeaders()
+                logger.info('Authorization successful')
+                url=f'https://www.nepalstock.com.np/api/nots/application/reports/{data['security_id']}'
+                client = httpx.Client(verify=False, http2=True, timeout=100)
+                response = client.get(
+                        url,
+                        headers=(auth_header),
+                    )
+                if response.status_code == 200:
+                    if len(response.json())>0 :
+                        return jsonify({"status":"success","data":response.json()}), 200
+                else:
+                    return jsonify({"message": "Failed to retrieve data", "status": response.status_code}), response.status_code
+                # Get the authorization headers
+            except Exception as e:
+                logger.error(f"Error during login: {str(e)}")
+                return jsonify({"message": "Login failed", "status": 500}), 500
+        
+    except Exception as e:
+        logger.error(f"Error getting authorization headers: {str(e)}")
+        return jsonify({"message": "Authorization failed", "status": 500}), 500
+    
 
 @app.route('/api/v1/scrape', methods=['POST'])
 def save_price_volume_history():
@@ -112,6 +160,25 @@ def save_price_volume_history():
             "status": 500,
             "error": str(e)
         }), 500
+        
+def api_validation(data):
+    """
+    Validate the request data for the API.
+    """
+    if not data:
+        return {"message": "No data provided", "status": 400}
+    
+    secret_key = os.getenv('SECRET_KEY_SCRAPE')
+    if not secret_key:
+        return {"message": "Server configuration error", "status": 500}
+    
+    if 'secret_key_scrape' not in data:
+        return {"message": "secret_key_scrape is required", "status": 400}
+    
+    if data['secret_key_scrape'] != secret_key:
+        return {"message": "Invalid secret key", "status": 401}
+    
+    return None
 
 def camel_to_snake(name):
     # Replace capital letters with underscore followed by lowercase letter
@@ -195,6 +262,29 @@ def insert_data(df):
         logger.error(f"Error inserting data into database:{e}")
         return False
 
+def get_security_id_from_price_volume(securiry_id=None):
+    # Get database URL from environment variable
+    database_url = os.getenv('DATABASE_URL')
+    if not database_url:
+        logger.error("DATABASE_URL environment variable is not set")
+        return False
+        
+    engine = create_engine(database_url)
+    table_name = 'stock_prices'
+    try:
+        with engine.begin() as conn:
+            if securiry_id is not None:
+            # If a specific security_id is provided, filter by it
+                query = f"select distinct(security_id),symbol from {table_name} where security_id={securiry_id};"
+            else:
+                query = f"select distinct(security_id),symbol from {table_name};"
+            df = pd.read_sql(query, conn)
+        return df['security_id'].tolist()
+    except Exception as e:
+        logger.error(f"Error retrieving data from database:{e}")
+        return False
+    
+    
 if __name__ == '__main__':
     logger.info('Starting Flask application')
     app.run(debug=True,port=8000)
