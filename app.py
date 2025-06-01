@@ -5,12 +5,18 @@ import logging
 import pandas as pd
 from datetime import datetime, timedelta
 import re
-import time
 import os
 from dotenv import load_dotenv
 import httpx
-import json
+from psycopg2 import sql, extras
+import psycopg2.errors
+from sqlalchemy.exc import SQLAlchemyError, IntegrityError
 
+import rollbar
+import rollbar.contrib.flask
+from flask import got_request_exception
+
+import sys
 # Load environment variables
 load_dotenv()
 
@@ -26,11 +32,21 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
+with app.app_context():
+    """init rollbar module"""
+    rollbar.init(
+        '8e328fef1b784ce686ac78356f7ac2546b1b7a8b030c13bee02ee92d987a176aed173b018202c52c81ff9293c3a09ed1',
+        # environment name - any string, like 'production' or 'development'
+        'flasktest',
+        # server root directory, makes tracebacks prettier
+        root=os.path.dirname(os.path.realpath(__file__)),
+        # flask already sets up logging
+        allow_logging_basic_config=False)
 
+    # send exceptions from `app` to rollbar, using flask's signal system.
+    got_request_exception.connect(rollbar.contrib.flask.report_exception, app)
+    
 nepse = Nepse()
-
-start_date = '2025-03-27'
-end_date='2025-05-21'
 
 dtype_spec = {
     'id': 'Int64',
@@ -52,9 +68,30 @@ dtype_spec = {
     'totalTrades': 'float64',
     'averageTradedPrice': 'float64',
     'marketCapitalization': 'float64'
-}
+}        
 
 nepse.setTLSVerification(False)
+
+@app.route('/')
+def hello():
+    print("DEBUG - in hello()")
+    x = None
+    x[5]
+    return "Hello World!"
+
+@app.route('/api/v1/market_status', methods=['GET'])
+def market_status():
+    logger.info('market_status endpoint accessed')
+    try:
+        # Get authorization headers
+        logger.info('Getting authorization headers')
+        response = nepse.getMarketStatus()        
+        return jsonify(response), 200
+        
+    except Exception as e:
+        logger.error(f"Error getting market status: {str(e)}")
+        return jsonify({"message": "Failed to retrieve market status", "status": 500}), 500
+
 
 @app.route('/api/v1/financial', methods=['POST'])
 def financial():
@@ -94,7 +131,7 @@ def financial():
                         headers=(auth_header),
                     )
                 if response.status_code == 200:
-                    return jsonify({"status":"success","data":response.json()}), 200
+                    return jsonify({"status":"success","data":response.json()[0]}), 200
                 else:
                     return jsonify({"message": "Failed to retrieve data", "status": response.status_code}), response.status_code
                 # Get the authorization headers
@@ -144,7 +181,7 @@ def divided():
                         headers=(auth_header),
                     )
                 if response.status_code == 200:
-                    return jsonify({"status":"success","data":response.json()}), 200
+                    return jsonify({"status":"success","data":response.json()[0]}), 200
                 else:
                     return jsonify({"message": "Failed to retrieve data", "status": response.status_code}), response.status_code
                 # Get the authorization headers
@@ -163,53 +200,29 @@ def save_price_volume_history():
         logger.info('Scrape endpoint start')
         # Get request data
         data = request.get_json()
-        
-        # Validate request data
-        if not data:
-            return jsonify({
-                "message": "No data provided",
-                "status": 400
-            }), 400
-            
         # Validate secret key
-        secret_key = os.getenv('SECRET_KEY_SCRAPE')
-        if not secret_key:
-            logger.error("SECRET_KEY_SCRAPE environment variable is not set")
-            return jsonify({
-                "message": "Server configuration error",
-                "status": 500
-            }), 500
-            
-        if 'secret_key_scrape' not in data:
-            return jsonify({
-                "message": "secret_key_scrape is required",
-                "status": 400
-            }), 400
-            
-        if data['secret_key_scrape'] != secret_key:
-            logger.warning("Invalid secret key provided")
-            return jsonify({
-                "message": "Invalid secret key",
-                "status": 401
-            }), 401
-            
+        validation = api_validation(data)
+        if validation is not None:
+            raise ValueError(validation['message'])
         # Log the request
         logger.info("Received valid scrape request")
         
         # Process the request
-        result = retrieve_cuurent_price_volume_history()
+        result = retrieve_current_price_volume_history()
         
         # Return response
         return jsonify(result), 200
         
     except Exception as e:
+        rollbar.report_exc_info()
         logger.error(f"Error processing request: {str(e)}")
         return jsonify({
-            "message": "Internal server error",
+            "message": "Exception occurred while processing the request",
             "status": 500,
             "error": str(e)
         }), 500
-        
+ 
+ 
 def api_validation(data):
     """
     Validate the request data for the API.
@@ -233,32 +246,25 @@ def camel_to_snake(name):
     # Replace capital letters with underscore followed by lowercase letter
     return re.sub(r'([a-z0-9])([A-Z])', r'\1_\2', name).lower()
 
-def retrieve_cuurent_price_volume_history():
+def retrieve_current_price_volume_history():
     current_date = datetime.now() 
     current_weekday = current_date.weekday()
     
     if current_weekday in [4, 5]:  # 4 is Friday, 5 is Saturday
         logger.info(f"Current date {current_date.strftime('%Y-%m-%d')} is {'Friday' if current_weekday == 4 else 'Saturday'}")
         return {"message": "Market is closed on Friday and Saturday"}
-    
-    current_date_str = current_date.strftime('%Y-%m-%d')
-    data = nepse.getPriceVolumeHistory(current_date_str)
-    return save_price_volume_history_df(data,current_date_str)
-
-def retrieve_price_volume_history():
-    start = datetime.strptime(start_date, "%Y-%m-%d")
-    end = datetime.strptime(end_date, "%Y-%m-%d")
-    date_list = [
-        (start + timedelta(days=i)).strftime("%Y-%m-%d")
-        for i in range((end - start).days + 1)
-        if (start + timedelta(days=i)).weekday() not in (4, 5)  # Skip Friday (4) and Saturday (5)
-    ]
-    for date in date_list:
-        logger.info(f"Retrieving data for date: {date}")
-        time.sleep(4)
-        data = nepse.getPriceVolumeHistory(date)
-        save_price_volume_history_df(data,date)
-    pass
+    try:
+        market_status = nepse.getMarketStatus()
+        if market_status['isOpen'] != 'OPEN':
+            logger.info(f"Market is currently {market_status['isOpen']}")
+            return {"message": f"Market is currently {market_status['isOpen']}", "status": 200}
+        current_date_str = current_date.strftime('%Y-%m-%d')
+        data = nepse.getPriceVolumeHistory(current_date_str)
+        return save_price_volume_history_df(data,current_date_str)
+    except Exception as e:
+        rollbar.report_exc_info()
+        logger.error(f"Error retrieving current price volume history: {str(e)}")
+        return {"message": "Exception occurred while retrieving current price volume history", "status": 500, "error": str(e)}
 
 def save_price_volume_history_df(data,date):
     if len(data['content'])>0:
@@ -326,15 +332,16 @@ def get_security_id_from_price_volume(securiry_id=None):
             # If a specific security_id is provided, filter by it
                 query = f"select distinct(security_id),symbol from {table_name} where security_id={securiry_id};"
             else:
-                query = f"select distinct(security_id),symbol from {table_name};"
+                query = f"select distinct(security_id),symbol from {table_name} order by security_id;"
             df = pd.read_sql(query, conn)
         return df['security_id'].tolist()
     except Exception as e:
         logger.error(f"Error retrieving data from database:{e}")
         return False
-    
-    
+
+
 if __name__ == '__main__':
     logger.info('Starting Flask application')
     app.run(debug=True,port=8000)
 # 
+
