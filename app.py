@@ -74,9 +74,6 @@ nepse.setTLSVerification(False)
 
 @app.route('/')
 def hello():
-    print("DEBUG - in hello()")
-    x = None
-    x[5]
     return "Hello World!"
 
 @app.route('/api/v1/market_status', methods=['GET'])
