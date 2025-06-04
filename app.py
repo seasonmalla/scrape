@@ -48,6 +48,15 @@ with app.app_context():
     
 nepse = Nepse()
 
+
+sector_wise_dtype_spec = {
+    'businessDate': 'string',
+    'sectorName': 'string',
+    'totalTransaction': 'float64',
+    'turnOverValues': 'float64',
+    'turnOverVolume': 'float64',
+    'createdAt': 'string'
+}
 dtype_spec = {
     'id': 'Int64',
     'businessDate': 'string',
@@ -76,18 +85,48 @@ nepse.setTLSVerification(False)
 def hello():
     return "Hello World!"
 
-@app.route('/api/v1/market_status', methods=['GET'])
+@app.route('/api/v1/market_status', methods=['POST'])
 def market_status():
     logger.info('market_status endpoint accessed')
     try:
-        # Get authorization headers
+        data = request.get_json()
+        validation = api_validation(data)
+        if validation is not None:
+            logger.error(f"Validation failed: {validation['message']}")
+            return jsonify(validation), validation['status']
         logger.info('Getting authorization headers')
         response = nepse.getMarketStatus()        
-        return jsonify(response), 200
+        return jsonify({"status":"success","data":response}), 200
         
     except Exception as e:
         logger.error(f"Error getting market status: {str(e)}")
         return jsonify({"message": "Failed to retrieve market status", "status": 500}), 500
+
+@app.route('/api/v1/company-list', methods=['POST'])
+def company_list():
+    logger.info('company_list endpoint accessed')
+    try:
+        data = request.get_json()
+        validation = api_validation(data)
+        if validation is not None:
+            logger.error(f"Validation failed: {validation['message']}")
+            return jsonify(validation), validation['status']
+        response = nepse.getSectorScrips()
+        records = [
+            {"sector": sector, "symbol": symbol}
+            for sector, symbols in response.items()
+            for symbol in symbols
+        ]
+        df = pd.DataFrame(records)
+        insert_data_symbol_sector = _upsert_sectory_symbol(df)
+        if insert_data_symbol_sector:
+            return jsonify({"status":"success","data":records}), 200
+        else:
+            return jsonify({"message": "Failed to insert sector symbols", "status": 500}), 500
+        
+    except Exception as e:
+        logger.error(f"Error getting company list: {str(e)}")
+        return jsonify({"message": "Failed to retrieve company list", "status": 500}), 500
 
 
 @app.route('/api/v1/financial', methods=['POST'])
@@ -189,7 +228,25 @@ def divided():
     except Exception as e:
         logger.error(f"Error getting authorization headers: {str(e)}")
         return jsonify({"message": "Authorization failed", "status": 500}), 500
-     
+
+
+@app.route('/api/v1/sector-summary', methods=['POST'])
+def save_sector_summary():
+    logger.info('sector_summary endpoint accessed')
+    data = request.get_json()
+    try:
+        # Validate request data
+        validation = api_validation(data)
+        if validation is not None:
+            logger.error(f"Validation failed: {validation['message']}")
+            return jsonify(validation), validation['status']
+        current_sector_wise_summary =_retrieve_current_sector_wise_summary()
+        return jsonify(current_sector_wise_summary), 200
+    except Exception as e:
+        rollbar.report_exc_info()
+        logger.error(f"Error getting market summary: {str(e)}")
+        return jsonify({"message": "Failed to retrieve market summary", "status": 500}), 500
+         
 
 @app.route('/api/v1/scrape', methods=['POST'])
 def save_price_volume_history():
@@ -219,6 +276,52 @@ def save_price_volume_history():
             "error": str(e)
         }), 500
  
+
+@app.route('/api/v1/sector-overview', methods=['POST'])
+def sector_overview():
+    logger.info('sector_overview endpoint accessed')
+    data = request.get_json()
+    try:
+        # Validate request data
+        validation = api_validation(data)
+        if validation is not None:
+            logger.error(f"Validation failed: {validation['message']}")
+            return jsonify(validation), validation['status']
+        response = nepse.getSummary()
+        return jsonify({"status":"success","data":response}), 200
+        
+    except Exception as e:
+        logger.error(f"Error getting authorization headers: {str(e)}")
+        return jsonify({"message": "Authorization failed", "status": 500}), 500
+
+
+@app.route('/api/v1/market-summary', methods=['POST'])
+def market_summary():
+    logger.info('market_summary endpoint accessed')
+    data = request.get_json()
+    
+    try:
+        # Validate request data
+        validation = api_validation(data)
+        if validation is not None:
+            logger.error(f"Validation failed: {validation['message']}")
+            return jsonify(validation), validation['status']
+            
+        logger.info('Getting authorization headers')
+        
+        auth_header = nepse.getAuthorizationHeaders()
+        logger.info('Authorization successful')
+        url=f'https://www.nepalstock.com.np/api/nots/market-summary-history'
+        client = httpx.Client(verify=False, http2=True, timeout=100)
+        response = client.get(
+                        url,
+                        headers=(auth_header),
+                    )
+        return jsonify({"status":"success","data":response.json()}), 200
+    except Exception as e:
+        rollbar.report_exc_info()
+        logger.error(f"Error getting market summary: {str(e)}")
+        return jsonify({"message": "Failed to retrieve market summary", "status": 500}), 500
  
 def api_validation(data):
     """
@@ -243,6 +346,38 @@ def camel_to_snake(name):
     # Replace capital letters with underscore followed by lowercase letter
     return re.sub(r'([a-z0-9])([A-Z])', r'\1_\2', name).lower()
 
+def _retrieve_current_sector_wise_summary():
+    logger.info('_retrieve_current_sector_wise_summary start')
+    current_date = datetime.now() 
+    current_weekday = current_date.weekday()
+    
+    if current_weekday in [4, 5]:  # 4 is Friday, 5 is Saturday
+        logger.info(f"Current date {current_date.strftime('%Y-%m-%d')} is {'Friday' if current_weekday == 4 else 'Saturday'}")
+        return {"message": "Market is closed on Friday and Saturday"}
+    try:
+        current_date_str = current_date.strftime('%Y-%m-%d')
+
+        data=_get_current_sector_wise_summary()
+        if data['status'] == 200:
+            logger.info(f"Sectorwise summary retrieved successfully for {current_date_str}")
+            df = pd.DataFrame(data['data'])
+            df['created_at'] = current_date_str
+            df["businessDate"] = pd.to_datetime(df["businessDate"], errors="coerce")
+            df["created_at"] = pd.to_datetime(df["created_at"], errors="coerce")
+            df.columns = [camel_to_snake(col) for col in df.columns]
+            response = _insert_sector_wise_summary(df)
+            if response:
+                return {"message": "Sectorwise summary retrieved successfully", "status": 200, 'response': response}
+            else:
+                return {"message": "Error inserting sectorwise summary", "status": 500}
+        else:
+            logger.error(f"Error retrieving sectorwise summary")
+            return {"message": "Error retrieving sectorwise summary", "status": data['status']}
+    except Exception as e:
+        rollbar.report_exc_info()
+        logger.error(f"Error retrieving current sector wise summary: {str(e)}")
+        return {"message": "Exception occurred while retrieving current sector wise summary", "status": 500, "error": str(e)}
+    
 def retrieve_current_price_volume_history():
     current_date = datetime.now() 
     current_weekday = current_date.weekday()
@@ -251,10 +386,6 @@ def retrieve_current_price_volume_history():
         logger.info(f"Current date {current_date.strftime('%Y-%m-%d')} is {'Friday' if current_weekday == 4 else 'Saturday'}")
         return {"message": "Market is closed on Friday and Saturday"}
     try:
-        market_status = nepse.getMarketStatus()
-        if market_status['isOpen'] != 'OPEN':
-            logger.info(f"Market is currently {market_status['isOpen']}")
-            return {"message": f"Market is currently {market_status['isOpen']}", "status": 200}
         current_date_str = current_date.strftime('%Y-%m-%d')
         data = nepse.getPriceVolumeHistory(current_date_str)
         return save_price_volume_history_df(data,current_date_str)
@@ -314,6 +445,57 @@ def insert_data(df):
         logger.error(f"Error inserting data into database:{e}")
         return False
 
+def _insert_sector_wise_summary(df):
+    logger.info(f"_insert_sector_wise_summary start")
+    database_url = os.getenv('DATABASE_URL')
+    if not database_url:
+        logger.error("DATABASE_URL environment variable is not set")
+        return False
+        
+    engine = create_engine(database_url)
+    table_name = 'stock_sector_wise_summary'
+    try:
+        with engine.begin() as conn:
+            df.to_sql(
+                name=table_name,
+                con=conn,
+                if_exists='append',
+                index=False,
+                method='multi',
+                chunksize=1000
+            )
+        return True
+    except Exception as e:
+        logger.error(f"Error inserting data into database:{e}")
+        return False
+
+def _upsert_sectory_symbol(df:pd.DataFrame):
+    logger.info(f"_upsert_sectory_symbol start")
+    database_url = os.getenv('DATABASE_URL')
+    if not database_url:
+        logger.error("DATABASE_URL environment variable is not set")
+        return False
+        
+    engine = create_engine(database_url)
+    table_name = 'stock_symbol_sectors'
+    
+    try:
+        with engine.begin() as conn:
+            df.to_sql(
+                name=table_name,
+                con=conn,
+                if_exists='replace',
+                index=False,
+                method='multi',
+                chunksize=1000
+            )
+        return True
+    except Exception as e:
+        logger.error(f"Error inserting data into database:{e}")
+        return False
+    ...
+    
+    
 def get_security_id_from_price_volume(securiry_id=None):
     # Get database URL from environment variable
     database_url = os.getenv('DATABASE_URL')
@@ -336,6 +518,26 @@ def get_security_id_from_price_volume(securiry_id=None):
         logger.error(f"Error retrieving data from database:{e}")
         return False
 
+def _get_current_sector_wise_summary():
+    logger.info('_get_current_sector_wise_summary start')
+    try:
+        auth_header = nepse.getAuthorizationHeaders()
+        logger.info('Authorization successful')
+        url=f'https://www.nepalstock.com.np/api/nots/sectorwise'
+        client = httpx.Client(verify=False, http2=True, timeout=100)
+        response = client.get(
+                        url,
+                        headers=(auth_header),
+                    )
+        if response.status_code == 200:
+            return {"status":200,"data":response.json()}
+        else:
+            logger.error(f"Failed to retrieve sectorwise summary: {response.status_code}")
+            return {"message": "Failed to retrieve sectorwise summary", "status": response.status_code}
+    except Exception as e:
+        rollbar.report_exc_info()
+        logger.error(f"Error retrieving sectorwise summary: {str(e)}")
+        return {"message": "Exception occurred while retrieving sectorwise summary", "status": 500, "error": str(e)}
 
 if __name__ == '__main__':
     logger.info('Starting Flask application')
