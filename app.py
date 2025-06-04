@@ -102,32 +102,6 @@ def market_status():
         logger.error(f"Error getting market status: {str(e)}")
         return jsonify({"message": "Failed to retrieve market status", "status": 500}), 500
 
-@app.route('/api/v1/company-list', methods=['POST'])
-def company_list():
-    logger.info('company_list endpoint accessed')
-    try:
-        data = request.get_json()
-        validation = api_validation(data)
-        if validation is not None:
-            logger.error(f"Validation failed: {validation['message']}")
-            return jsonify(validation), validation['status']
-        response = nepse.getSectorScrips()
-        records = [
-            {"sector": sector, "symbol": symbol}
-            for sector, symbols in response.items()
-            for symbol in symbols
-        ]
-        df = pd.DataFrame(records)
-        insert_data_symbol_sector = _upsert_sectory_symbol(df)
-        if insert_data_symbol_sector:
-            return jsonify({"status":"success","data":records}), 200
-        else:
-            return jsonify({"message": "Failed to insert sector symbols", "status": 500}), 500
-        
-    except Exception as e:
-        logger.error(f"Error getting company list: {str(e)}")
-        return jsonify({"message": "Failed to retrieve company list", "status": 500}), 500
-
 
 @app.route('/api/v1/financial', methods=['POST'])
 def financial():
@@ -275,7 +249,32 @@ def save_price_volume_history():
             "status": 500,
             "error": str(e)
         }), 500
- 
+
+@app.route('/api/v1/company-list', methods=['POST'])
+def company_list():
+    logger.info('company_list endpoint accessed')
+    try:
+        data = request.get_json()
+        validation = api_validation(data)
+        if validation is not None:
+            logger.error(f"Validation failed: {validation['message']}")
+            return jsonify(validation), validation['status']
+        response = nepse.getSectorScrips()
+        records = [
+            {"sector": sector, "symbol": symbol}
+            for sector, symbols in response.items()
+            for symbol in symbols
+        ]
+        df = pd.DataFrame(records)
+        insert_data_symbol_sector = _upsert_sectory_symbol(df)
+        if insert_data_symbol_sector:
+            return jsonify({"status":"success","data":records}), 200
+        else:
+            return jsonify({"message": "Failed to insert sector symbols", "status": 500}), 500
+        
+    except Exception as e:
+        logger.error(f"Error getting company list: {str(e)}")
+        return jsonify({"message": "Failed to retrieve company list", "status": 500}), 500
 
 @app.route('/api/v1/sector-overview', methods=['POST'])
 def sector_overview():
@@ -293,7 +292,6 @@ def sector_overview():
     except Exception as e:
         logger.error(f"Error getting authorization headers: {str(e)}")
         return jsonify({"message": "Authorization failed", "status": 500}), 500
-
 
 @app.route('/api/v1/market-summary', methods=['POST'])
 def market_summary():
