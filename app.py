@@ -354,7 +354,7 @@ def _retrieve_current_sector_wise_summary():
         return {"message": "Market is closed on Friday and Saturday"}
     try:
         current_date_str = current_date.strftime('%Y-%m-%d')
-
+        logger.info(f'_retrieve_current_sector_wise_summary start for date: {current_date_str}')
         data=_get_current_sector_wise_summary()
         if data['status'] == 200:
             logger.info(f"Sectorwise summary retrieved successfully for {current_date_str}")
@@ -377,7 +377,9 @@ def _retrieve_current_sector_wise_summary():
         return {"message": "Exception occurred while retrieving current sector wise summary", "status": 500, "error": str(e)}
     
 def retrieve_current_price_volume_history():
+    
     current_date = datetime.now() 
+    
     current_weekday = current_date.weekday()
     
     if current_weekday in [4, 5]:  # 4 is Friday, 5 is Saturday
@@ -385,6 +387,7 @@ def retrieve_current_price_volume_history():
         return {"message": "Market is closed on Friday and Saturday"}
     try:
         current_date_str = current_date.strftime('%Y-%m-%d')
+        logger.info(f'retrieve_current_price_volume_history start for date: {current_date_str}')
         data = nepse.getPriceVolumeHistory(current_date_str)
         return save_price_volume_history_df(data,current_date_str)
     except Exception as e:
