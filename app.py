@@ -543,5 +543,7 @@ def _get_current_sector_wise_summary():
 if __name__ == '__main__':
     logger.info('Starting Flask application')
     app.run(debug=True,port=8000)
-# 
+
+# this is to test vercel deployment
+
 
